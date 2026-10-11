@@ -1,6 +1,8 @@
 name: cdrom_image
-description: CD-ROM disc images (.cue/.iso/.bin) on a virtual file system, in pure Dart.
+description: CD-ROM disc images (.cue/.iso/.bin/.chd) on a virtual file system, in pure Dart.
 version: 0.1.0
+repository: https://github.com/reki2000/cdrom_image
+issue_tracker: https://github.com/reki2000/cdrom_image/issues
 
 publish_to: none
 
