@@ -17,7 +17,8 @@ final bin = Uint8List(2352 * 4);
 Future<List<String>> referenced(
     Map<String, Uint8List> files, String path) async {
   final dir = MemoryDirectory.of(files);
-  final (_, refs) = await DiscImage.parse(dir.files.values, dir.files[path]!);
+  final (_, refs) =
+      await DiscImage.parse(dir.files[path]!, files: dir.files.values);
   return [for (final f in refs) f.path];
 }
 
@@ -39,6 +40,18 @@ class FileSystemError implements Exception {
 }
 
 void main() {
+  test('CUE candidates can omit the image and include unrelated files',
+      () async {
+    final imageFile = MemoryDiscFile('disc.cue', text(cue(['track.bin'])));
+    final track = MemoryDiscFile('track.bin', bin);
+    final (image, refs) =
+        await DiscImage.parse(imageFile, files: [track, _BrokenFile()]);
+    expect(refs, [track]);
+    expect(image.totalSectors, 4);
+    expect((await image.readSectors(0, 1)).single, bin.sublist(0, 2352));
+    await expectLater(DiscImage.parse(imageFile), missing('track.bin'));
+  });
+
   test('the files a cue refers to are returned', () async {
     expect(
         await referenced({
@@ -80,7 +93,7 @@ void main() {
 
   test('an error of the storage is given to the caller', () async {
     final file = _BrokenFile();
-    expect(DiscImage.parse([file], file), throwsA(isA<FileSystemError>()));
+    expect(DiscImage.parse(file), throwsA(isA<FileSystemError>()));
   });
 
   test('an iso or a bin refers to no file', () async {

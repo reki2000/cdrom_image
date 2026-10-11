@@ -9,7 +9,7 @@ const size = DiscImage.sectorSize;
 
 /// the image of [disc], the arguments of [DiscImage.parse]
 Future<DiscImage> open((DiscFile, Iterable<DiscFile>) disc) async =>
-    (await DiscImage.parse(disc.$2, disc.$1)).$1;
+    (await DiscImage.parse(disc.$1, files: disc.$2)).$1;
 
 Future<DiscImage> insert(String main, Map<String, Uint8List> files) =>
     open(memoryDisc(main, {
@@ -58,10 +58,12 @@ void main() {
       'first/track.bin': makeBin(1, id: 7),
     });
     final files = directory.files.values.toList();
-    final (first, firstFiles) = await DiscImage.parse(directory.files.values,
-        files.singleWhere((file) => file.path == 'first/disc.cue'));
-    final (second, secondFiles) = await DiscImage.parse(directory.files.values,
-        files.singleWhere((file) => file.path == 'second/disc.cue'));
+    final (first, firstFiles) = await DiscImage.parse(
+        files.singleWhere((file) => file.path == 'first/disc.cue'),
+        files: directory.files.values);
+    final (second, secondFiles) = await DiscImage.parse(
+        files.singleWhere((file) => file.path == 'second/disc.cue'),
+        files: directory.files.values);
     expect((await first.readSectors(0, 1)).single[100], 7);
     expect((await second.readSectors(0, 1)).single[100], 42);
     expect(firstFiles.map((file) => file.path), ['first/track.bin']);
@@ -84,15 +86,22 @@ void main() {
     });
     final files = directory.files.values.toList();
     final (disc, referenced) =
-        await DiscImage.parse(directory.files.values, files[0]);
+        await DiscImage.parse(files[0], files: directory.files.values);
     expect(disc.toc.tracks.length, 2);
     expect(referenced, [files[1]]);
     expect(await referenced.single.length(), size * 2);
     expect(() => referenced.clear(), throwsUnsupportedError);
-    final (iso, isoFiles) =
-        await DiscImage.parse(directory.files.values, files[2]);
+    final (iso, isoFiles) = await DiscImage.parse(files[2]);
     expect(iso.totalSectors, 1);
     expect(isoFiles, isEmpty);
+  });
+
+  test('standalone BIN images do not require a file list', () async {
+    final file = MemoryDiscFile('disc.bin', makeBin(2, id: 7));
+    final (image, refs) = await DiscImage.parse(file);
+    expect(refs, isEmpty);
+    expect(image.totalSectors, 2);
+    expect((await image.readSectors(1, 1)).single[100], 8);
   });
 
   test('missing references and invalid descriptions produce structured errors',
@@ -105,13 +114,13 @@ void main() {
     });
     final files = directory.files.values.toList();
     await expectLater(
-        DiscImage.parse(directory.files.values, files[0]),
+        DiscImage.parse(files[0], files: directory.files.values),
         throwsA(isA<DiscParseException>()
             .having((error) => error.imagePath, 'image path', 'disc.cue')
             .having(
                 (error) => error.referencedPath, 'reference', 'missing.bin')));
     await expectLater(
-        DiscImage.parse(directory.files.values, files[1]),
+        DiscImage.parse(files[1], files: directory.files.values),
         throwsA(isA<DiscParseException>()
             .having((error) => error.imagePath, 'image path', 'invalid.cue')
             .having((error) => error.cause, 'cause', isA<FormatException>())));
@@ -127,7 +136,8 @@ void main() {
         'track.bin': makeBin(1),
       });
       await expectLater(
-          DiscImage.parse(directory.files.values, directory.files['disc.cue']!),
+          DiscImage.parse(directory.files['disc.cue']!,
+              files: directory.files.values),
           throwsA(isA<DiscParseException>().having(
               (error) => error.cause, 'cause', isA<FormatException>())));
     }

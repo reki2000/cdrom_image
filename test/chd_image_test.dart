@@ -84,7 +84,7 @@ Uint8List frame(int fill, {int size = 2352}) =>
 
 Future<DiscImage> open(Uint8List chd) async {
   final file = MemoryDiscFile('disc.chd', chd);
-  final (image, refs) = await DiscImage.parse([file], file);
+  final (image, refs) = await DiscImage.parse(file);
   expect(refs, isEmpty);
   return image;
 }
@@ -192,13 +192,13 @@ void main() {
 
   test('not a CHD, or not version 5', () async {
     final file = MemoryDiscFile('bad.chd', Uint8List(200));
-    expect(DiscImage.parse([file], file), throwsA(isA<DiscParseException>()));
+    expect(DiscImage.parse(file), throwsA(isA<DiscParseException>()));
     final v4 = uncompressedChd([
       ('TRACK:1 TYPE:MODE1_RAW SUBTYPE:NONE FRAMES:1', [frame(1)])
     ]);
     v4[15] = 4;
     final f4 = MemoryDiscFile('v4.chd', v4);
-    expect(DiscImage.parse([f4], f4), throwsA(isA<DiscParseException>()));
+    expect(DiscImage.parse(f4), throwsA(isA<DiscParseException>()));
   });
 
   for (final mode in [1, 2]) {
@@ -281,7 +281,7 @@ void chdmanFixture() {
         () async {
       final file =
           MemoryDiscFile(name, File('test/fixtures/$name').readAsBytesSync());
-      final (image, _) = await DiscImage.parse([file], file);
+      final (image, _) = await DiscImage.parse(file);
       expect([
         for (final t in image.toc.tracks)
           (t.number, t.isAudio, t.startLba, t.sectors)

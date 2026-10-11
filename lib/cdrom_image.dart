@@ -1,6 +1,6 @@
-/// CD-ROM disc images (.cue/.iso/.bin) on a virtual file system: give the
-/// files as [DiscFile]s, and read the TOC and the sectors by LBA with
-/// [DiscImage].
+/// Pure Dart reader for CUE, ISO, BIN and CHD CD-ROM images.
+///
+/// Supply storage through [DiscFile] and use [DiscImage] for TOC and sector access.
 library;
 
 export 'filesystem_api.dart';

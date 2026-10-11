@@ -1,0 +1,7 @@
+.dart_tool/
+/build/
+/coverage/
+/doc/api/
+*.log
+.DS_Store
+AGENTS.md

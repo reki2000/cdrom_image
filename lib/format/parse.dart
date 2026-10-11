@@ -7,8 +7,8 @@ import 'disc_source.dart';
 import 'iso/iso_image.dart';
 
 /// Parses [file], resolving the referenced tracks in [files].
-Future<(DiscImage, List<DiscFile>)> parse(
-    Iterable<DiscFile> files, DiscFile file) async {
+Future<(DiscImage, List<DiscFile>)> parse(DiscFile file,
+    {Iterable<DiscFile> files = const []}) async {
   try {
     if (ChdImage.isChd(file.path)) {
       return (await ChdImage.open(file), <DiscFile>[]);

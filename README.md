@@ -1,67 +1,20 @@
 # cdrom_image
 
-CD-ROM disc images (.cue / .iso / .bin / .chd) on a virtual file system, in
-pure Dart (the only dependency is `archive`, for deflate, LZMA and zstd). It parses
-the image, and gives the TOC and the raw sectors by LBA, whatever the format.
+Pure Dart reader for CUE, ISO, BIN and CHD CD-ROM images. Provides TOC and sector access through a caller-supplied `DiscFile` API. Storage backends are independent of image formats.
 
-Supported:
+ISO 9660 file listing and extraction are not implemented.
 
-- .cue sheets: multiple track files, audio/data tracks, `INDEX 00/01`,
-  `PREGAP`, `POSTGAP`, `MODE1/2048`
-- single .iso/.bin files: 2048 or 2352 bytes per sector
-- .chd (version 5) CD-ROM images made by chdman: the `cdlz`, `cdzl`, `cdfl`
-  (chdman's default) and `cdzs` (zstd) codecs, with the sync and ECC chdman
-  removes regenerated, and audio in the byte order of a .bin. Not supported:
-  CHDs with a parent, versions 3 and 4, and cooked `MODE2_FORM1/FORM2` tracks.
+## Supported formats
 
-The formats are in `lib/format/` (`cue/`, `iso/`, `chd/`); the public API is
-`lib/cdrom_image.dart`.
+- CUE: multiple binary track files, audio/data tracks, `INDEX 00/01`, `PREGAP`, `POSTGAP` and `MODE1/2048`.
+- ISO/BIN: single files with 2048 or 2352 bytes per sector.
+- CHD v5: chdman CD-ROM images using `cdlz`, `cdzl`, `cdfl` or `cdzs` (zstd). Reconstructs omitted sync/ECC bytes. Returns audio in BIN byte order.
 
-## API
-
-- `DiscFile` (`filesystem_api.dart`): a file given by the caller: `path`
-  (relative to its directory, separated by `/`), `length()` and
-  `read(offset, length)`. Each call holds its own resources; there is no
-  open or close. A directory is an `Iterable<DiscFile>`.
-- `DiscImage` (`image_api.dart`): `toc` (`DiscToc`, `DiscTrack`),
-  `totalSectors`, and `readSectors(lba, count)`.
-- `DiscImage.parse(files, file)`: parses `file`, finding the files a .cue
-  refers to in `files`. Returns the image and the referenced files (empty
-  for an .iso/.bin). Throws `DiscParseException` for an invalid description
-  or a missing file.
-- `DiscFileKind.of(name)` (`image_api.dart`): whether a file name can be a
-  disc image.
-- `memory.dart`: files on memory, for tests. `memoryDisc(main, files)`
-  gives the arguments of `DiscImage.parse`.
+Unsupported: parent CHDs, CHD v3/v4, non-CD-ROM CHDs and cooked CHD `MODE2_FORM1/FORM2` tracks.
 
 ## Usage
 
-```dart
-import 'dart:convert';
-import 'dart:typed_data';
-
-import 'package:cdrom_image/cdrom_image.dart';
-import 'package:cdrom_image/memory.dart';
-
-Future<void> main() async {
-  final directory = MemoryDirectory.of({
-    'disc.cue': Uint8List.fromList(utf8.encode('''
-FILE "track.bin" BINARY
-  TRACK 01 MODE1/2048
-    INDEX 01 00:00:00
-''')),
-    'track.bin': Uint8List(2048 * 2),
-  });
-  final (image, referenced) = await DiscImage.parse(
-      directory.files.values, directory.files['disc.cue']!);
-  print(referenced.map((file) => file.path)); // (track.bin)
-  print(image.toc.tracks); // [track 1 data lba:0 sectors:2]
-  final sectors = await image.readSectors(0, 2);
-  print(sectors.first.length); // 2352
-}
-```
-
-To read other storage, extend `DiscFile`:
+Implement `DiscFile` with `path`, `length()` and `read(offset, length)`. Paths must be relative to a common directory and use `/`. Concurrent reads must be independent. Local-file implementation:
 
 ```dart
 import 'dart:io';
@@ -81,7 +34,7 @@ class LocalDiscFile extends DiscFile {
 
   @override
   Future<Uint8List> read(int offset, int length) async {
-    final handle = await file.open(); // a handle per read: reads may overlap
+    final handle = await file.open(); // Separate handle for each read.
     try {
       await handle.setPosition(offset);
       return await handle.read(length);
@@ -92,21 +45,45 @@ class LocalDiscFile extends DiscFile {
 }
 ```
 
-## Details
+Call `DiscImage.parse(file, files: candidates)`. For a CUE referencing `track.bin`, append this function to the implementation above:
 
-- A .cue file's references are relative to the .cue file; the case is
-  ignored, `\` is taken as `/`, and a path out of the directory is missing.
-- LBAs start at 0, without the 150 sectors of the lead-in.
-- `readSectors` returns 2352-byte sectors, for a range inside
-  `totalSectors`. 2048-byte data is expanded to mode 1 sectors (EDC/ECC are
-  left zero); gaps and short reads are filled with zero.
-- Storage errors of `length()` and `read()` are passed to the caller.
+```dart
+Future<void> main() async {
+  final cue = LocalDiscFile(File('example/images/disc.cue'), 'disc.cue');
+  final bin = LocalDiscFile(File('example/images/track.bin'), 'track.bin');
 
-## Tests
+  // Supply known references, or all candidate files.
+  final (image, referenced) = await DiscImage.parse(cue, files: [bin]);
+  print(referenced.map((file) => file.path)); // (track.bin)
+  print(image.toc.tracks);
+
+  final sectors = await image.readSectors(0, 1);
+  print(sectors.first.length); // 2352
+}
+```
+
+Set `files` to the known CUE references. If references are unknown, supply all candidate files, such as every file in the same directory. Image and candidate paths must share the same directory root. Unrelated candidates are ignored; the returned list contains only referenced files. Including the image file in `files` is optional.
+
+For standalone ISO/BIN/CHD images, use `await DiscImage.parse(imageFile)`. Implement `DiscFile` for other storage backends, including browser files.
+
+Run the [example](example/cdrom_image_example.dart) from the package root:
 
 ```sh
-dart test
+dart run example/cdrom_image_example.dart
 ```
+
+The bundled `example/images/disc.cue` references `track.bin`, which contains two zero-filled Mode 1 payloads (2048 bytes each). This synthetic fixture contains no ISO 9660 filesystem.
+
+## Sector contract and error handling
+
+- CUE references: relative to the CUE file, case-insensitive, with `\` normalized to `/`. Paths outside the directory root are treated as missing files.
+- LBA 0 corresponds to MSF 00:02:00.
+- `readSectors(lba, count)`: returns 2352-byte sectors. Requires a nonnegative count and a range within `totalSectors`. `isReadable(lba)` checks a single LBA.
+- Cooked Mode 1: expands 2048-byte payloads with sync and MSF/mode headers. EDC/ECC remain zero; output is not a bit-exact raw dump.
+- Gaps: zero-filled sectors. CUE/ISO/BIN reads also zero-fill missing bytes at EOF. Read success does not verify source integrity.
+- Raw CHD sectors: reconstruct ECC omitted by compression. Cooked Mode 1 expansion leaves EDC/ECC zero.
+- Storage errors from `length()` and `read()` propagate to the caller.
+- Invalid descriptions or missing CUE references: `DiscParseException`. Compressed-data errors may surface during sector reads.
 
 ## License
 

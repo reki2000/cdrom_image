@@ -33,8 +33,9 @@ Future<DiscImage> _open(String path) async {
     for (final e in dir.listSync())
       if (e is File) _LocalFile(e, e.uri.pathSegments.last)
   ];
-  final main = files.firstWhere((f) => f.path == File(path).uri.pathSegments.last);
-  return (await DiscImage.parse(files, main)).$1;
+  final main =
+      files.firstWhere((f) => f.path == File(path).uri.pathSegments.last);
+  return (await DiscImage.parse(main, files: files)).$1;
 }
 
 Future<void> main(List<String> args) async {
@@ -44,7 +45,8 @@ Future<void> main(List<String> args) async {
   if (a.totalSectors != b.totalSectors) {
     print('total sectors differ: ${a.totalSectors} ${b.totalSectors}');
   }
-  final total = a.totalSectors < b.totalSectors ? a.totalSectors : b.totalSectors;
+  final total =
+      a.totalSectors < b.totalSectors ? a.totalSectors : b.totalSectors;
   final sw = Stopwatch()..start();
   var differ = 0;
   const chunk = 75;
