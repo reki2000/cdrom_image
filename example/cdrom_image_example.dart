@@ -31,9 +31,9 @@ Future<void> main() async {
 
   // Supply known references, or all candidate files.
   final (image, referenced) = await DiscImage.parse(cue, files: [bin]);
-  print(referenced.map((file) => file.path)); // (track.bin)
-  print(image.toc.tracks);
+  stdout.writeln(referenced.map((file) => file.path)); // (track.bin)
+  stdout.writeln(image.toc.tracks);
 
   final sectors = await image.readSectors(0, 1);
-  print(sectors.first.length); // 2352
+  stdout.writeln(sectors.first.length); // 2352
 }

@@ -40,10 +40,10 @@ Future<DiscImage> _open(String path) async {
 
 Future<void> main(List<String> args) async {
   final a = await _open(args[0]), b = await _open(args[1]);
-  print('a: ${a.toc.tracks}');
-  print('b: ${b.toc.tracks}');
+  stdout.writeln('a: ${a.toc.tracks}');
+  stdout.writeln('b: ${b.toc.tracks}');
   if (a.totalSectors != b.totalSectors) {
-    print('total sectors differ: ${a.totalSectors} ${b.totalSectors}');
+    stdout.writeln('total sectors differ: ${a.totalSectors} ${b.totalSectors}');
   }
   final total =
       a.totalSectors < b.totalSectors ? a.totalSectors : b.totalSectors;
@@ -59,8 +59,9 @@ Future<void> main(List<String> args) async {
       for (int k = 0; same && k < sa[i].length; k++) {
         same = sa[i][k] == sb[i][k];
       }
-      if (!same && differ++ < 10) print('sector ${lba + i} differs');
+      if (!same && differ++ < 10) stdout.writeln('sector ${lba + i} differs');
     }
   }
-  print('$total sectors, $differ differ (${sw.elapsedMilliseconds} ms)');
+  stdout
+      .writeln('$total sectors, $differ differ (${sw.elapsedMilliseconds} ms)');
 }
