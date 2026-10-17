@@ -444,6 +444,7 @@ class ChdImage implements DiscImage {
 
   @override
   Future<List<Uint8List>> readSectors(int lba, int count) async {
+    _prefetch(lba, count);
     final result = <Uint8List>[];
     for (int i = 0; i < count; i++) {
       result.add(await _sector(lba + i));
@@ -464,13 +465,62 @@ class ChdImage implements DiscImage {
     return _spans[lo];
   }
 
+  /// the byte of [lba] in the CHD, or null if it is not stored
+  int? _byteOf(int lba) {
+    final span = _spanOf(lba);
+    final frame = span.frame;
+    return frame == null ? null : (frame + lba - span.lba) * _frameBytes;
+  }
+
+  /// reads the hunks of the sectors from [lba] which are not cached, with one
+  /// file read for each run of hunks stored contiguously in the file
+  void _prefetch(int lba, int count) {
+    final end = (lba + count).clamp(0, totalSectors);
+    final hunks = <int>[];
+    for (int s = lba.clamp(0, totalSectors); s < end; s++) {
+      final byte = _byteOf(s);
+      if (byte == null) continue;
+      final index = byte ~/ _hunkBytes;
+      if ((hunks.isEmpty || hunks.last != index) &&
+          !_hunks.containsKey(index) &&
+          _kinds[index] <= _uncompressed) {
+        hunks.add(index);
+      }
+    }
+    if (hunks.length > _cachedHunks) hunks.length = _cachedHunks;
+
+    var first = 0;
+    for (int i = 1; i <= hunks.length; i++) {
+      if (i < hunks.length &&
+          _offsets[hunks[i]] ==
+              _offsets[hunks[i - 1]] + _storedBytes(hunks[i - 1])) {
+        continue;
+      }
+      final run = hunks.sublist(first, i);
+      first = i;
+      if (run.length < 2) continue; // read by _hunk
+      final start = _offsets[run.first];
+      final bytes =
+          file.read(start, _offsets[run.last] + _storedBytes(run.last) - start);
+      for (final index in run) {
+        final at = _offsets[index] - start;
+        _cache(
+            index,
+            bytes.then((data) => _decode(index,
+                Uint8List.sublistView(data, at, at + _storedBytes(index)))));
+      }
+    }
+  }
+
+  int _storedBytes(int index) =>
+      _kinds[index] == _uncompressed ? _hunkBytes : _lengths[index];
+
   Future<Uint8List> _sector(int lba) async {
     if (!isReadable(lba)) throw RangeError.range(lba, 0, totalSectors - 1);
     final span = _spanOf(lba);
-    final frame = span.frame;
-    if (frame == null) return Uint8List(_sectorBytes);
+    final byte = _byteOf(lba);
+    if (byte == null) return Uint8List(_sectorBytes);
 
-    final byte = (frame + lba - span.lba) * _frameBytes;
     final hunk = await _hunk(byte ~/ _hunkBytes);
     final at = byte % _hunkBytes;
     final size = _Track.dataSize(span.type);
@@ -516,7 +566,11 @@ class ChdImage implements DiscImage {
       _hunks[index] = cached; // the most recently used
       return cached;
     }
-    final future = _readHunk(index);
+    return _cache(index, _readHunk(index));
+  }
+
+  /// caches [future] of the hunk [index], the most recently used
+  Future<Uint8List> _cache(int index, Future<Uint8List> future) {
     _hunks[index] = future;
     // a failed read is read again next time
     future.catchError((Object _) {
@@ -533,20 +587,25 @@ class ChdImage implements DiscImage {
     final kind = _kinds[index];
     final offset = _offsets[index];
     switch (kind) {
-      case _uncompressed:
-        final data = await file.read(offset, _hunkBytes);
-        return data.length == _hunkBytes
-            ? data
-            : (Uint8List(_hunkBytes)..setAll(0, data));
       case _self:
         return _hunk(offset);
       case _parent:
         throw const FormatException(
             'chd: a CHD with a parent is not supported');
       default:
-        final src = await file.read(offset, _lengths[index]);
-        return _decompress(_codecs[kind], src);
+        return _decode(index, await file.read(offset, _storedBytes(index)));
     }
+  }
+
+  /// the hunk [index] from its bytes [src] in the file
+  Uint8List _decode(int index, Uint8List src) {
+    final kind = _kinds[index];
+    if (kind == _uncompressed) {
+      return src.length == _hunkBytes
+          ? src
+          : (Uint8List(_hunkBytes)..setAll(0, src));
+    }
+    return _decompress(_codecs[kind], src);
   }
 
   /// decompresses a hunk of the CD codecs: the sectors and the subcodes of

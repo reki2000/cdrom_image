@@ -295,5 +295,22 @@ void chdmanFixture() {
         expect(sectors[lba], expected[lba], reason: 'lba $lba');
       }
     });
+
+    test('the contiguous hunks of $name are read at once', () async {
+      final file =
+          MemoryDiscFile(name, File('test/fixtures/$name').readAsBytesSync());
+      final (image, _) = await DiscImage.parse(file);
+      var reads = 0;
+      file.onRead = (_, __) => reads++;
+      final sectors = await image.readSectors(0, image.totalSectors);
+      expect(reads, 1);
+      final expected = fixtureSectors();
+      for (int lba = 0; lba < expected.length; lba++) {
+        expect(sectors[lba], expected[lba], reason: 'lba $lba');
+      }
+      // cached hunks are not read again
+      await image.readSectors(0, 8);
+      expect(reads, 1);
+    });
   }
 }
