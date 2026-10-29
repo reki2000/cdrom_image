@@ -1,3 +1,8 @@
+## Unreleased
+
+- CHD v5 DVD images: 2048-byte sectors with the `zlib`, `lzma` and `zstd` codecs, read as one Mode 1 data track.
+- The CHD hunk cache is sized by bytes.
+
 ## 0.1.0
 
 - Initial release: CUE, ISO, BIN and CHD v5 CD-ROM images in pure Dart.

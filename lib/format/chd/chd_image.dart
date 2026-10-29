@@ -1,5 +1,6 @@
-// CD-ROM images in the CHD format (version 5): the TOC from the metadata and
-// the sectors from the compressed hunks.
+// CD-ROM and DVD images in the CHD format (version 5): the TOC from the
+// metadata and the sectors from the compressed hunks.
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../../filesystem_api.dart';
@@ -11,6 +12,9 @@ import 'flac.dart';
 /// bytes of a CD frame in a CHD: the sector and the subcode
 const _frameBytes = 2448;
 const _sectorBytes = 2352;
+
+/// bytes of a DVD sector in a CHD: the user data only
+const _dvdSectorBytes = 2048;
 
 /// the frames of a track are padded to a multiple of this in a CHD
 const _trackPadding = 4;
@@ -39,7 +43,10 @@ int _tag(String s) =>
 final _cdzl = _tag('cdzl'),
     _cdlz = _tag('cdlz'),
     _cdzs = _tag('cdzs'),
-    _cdfl = _tag('cdfl');
+    _cdfl = _tag('cdfl'),
+    _zlib = _tag('zlib'),
+    _lzma = _tag('lzma'),
+    _zstd = _tag('zstd');
 
 // the kinds of the map entries
 const _compressed3 = 3; // 0..3: the codec of the header
@@ -197,10 +204,14 @@ class _Span {
   _Span(this.lba, this.count, this.frame, this.type);
 }
 
-/// a CD-ROM image in a CHD file
+/// a CD-ROM or DVD image in a CHD file. a DVD is given as one data track of
+/// mode 1 sectors.
 class ChdImage implements DiscImage {
   final DiscFile file;
   final int _hunkBytes;
+
+  /// bytes of a sector in the hunks: a CD frame or a DVD sector
+  final int _unitBytes;
   final List<int> _codecs;
   final Uint8List _kinds; // of the map entries
   final List<int> _offsets;
@@ -211,10 +222,15 @@ class ChdImage implements DiscImage {
 
   /// decompressed hunks, the most recently used last
   final _hunks = <int, Future<Uint8List>>{};
-  static const _cachedHunks = 32;
 
-  ChdImage._(this.file, this._hunkBytes, this._codecs, this._kinds,
-      this._offsets, this._lengths, this._spans, this.toc);
+  /// the hunks kept in [_hunks]: at least 32, or 1 MiB of them. a DVD hunk
+  /// holds only a few sectors.
+  late final int _cachedHunks = max(32, (1 << 20) ~/ _hunkBytes);
+
+  ChdImage._(this.file, this._hunkBytes, this._unitBytes, this._codecs,
+      this._kinds, this._offsets, this._lengths, this._spans, this.toc);
+
+  bool get _isDvd => _unitBytes == _dvdSectorBytes;
 
   static bool isChd(String name) => name.toLowerCase().endsWith('.chd');
 
@@ -237,7 +253,11 @@ class ChdImage implements DiscImage {
     if (header.sublist(104, 124).any((b) => b != 0)) {
       throw const FormatException('chd: a CHD with a parent is not supported');
     }
-    if (unitBytes != _frameBytes || hunkBytes % _frameBytes != 0) {
+    final dvd = unitBytes == _dvdSectorBytes &&
+        await _hasMetadata(file, metaOffset, _tag('DVD '));
+    if (unitBytes == 0 ||
+        !dvd && unitBytes != _frameBytes ||
+        hunkBytes % unitBytes != 0) {
       throw const FormatException('chd: not a CD-ROM image');
     }
     final hunkCount = (logicalBytes + hunkBytes - 1) ~/ hunkBytes;
@@ -258,10 +278,34 @@ class ChdImage implements DiscImage {
           file, mapOffset, hunkBytes, unitBytes, kinds, offsets, lengths);
     }
 
+    if (dvd) {
+      final sectors = logicalBytes ~/ _dvdSectorBytes;
+      return ChdImage._(
+          file,
+          hunkBytes,
+          unitBytes,
+          codecs,
+          kinds,
+          offsets,
+          lengths,
+          [_Span(0, sectors, 0, 'MODE1')],
+          DiscToc([DiscTrack(1, false, 0, sectors)], sectors));
+    }
     final tracks = await _readTracks(file, metaOffset);
     final (spans, discTracks, total) = _layout(tracks);
-    return ChdImage._(file, hunkBytes, codecs, kinds, offsets, lengths, spans,
-        DiscToc(discTracks, total));
+    return ChdImage._(file, hunkBytes, unitBytes, codecs, kinds, offsets,
+        lengths, spans, DiscToc(discTracks, total));
+  }
+
+  /// true if the metadata from [offset] has an entry of [tag]
+  static Future<bool> _hasMetadata(DiscFile file, int offset, int tag) async {
+    while (offset != 0) {
+      final head = await file.read(offset, 16);
+      if (head.length < 16) return false;
+      if (_be(head, 0, 4) == tag) return true;
+      offset = _be(head, 8, 8);
+    }
+    return false;
   }
 
   static Future<void> _readMap(
@@ -469,7 +513,7 @@ class ChdImage implements DiscImage {
   int? _byteOf(int lba) {
     final span = _spanOf(lba);
     final frame = span.frame;
-    return frame == null ? null : (frame + lba - span.lba) * _frameBytes;
+    return frame == null ? null : (frame + lba - span.lba) * _unitBytes;
   }
 
   /// reads the hunks of the sectors from [lba] which are not cached, with one
@@ -611,6 +655,7 @@ class ChdImage implements DiscImage {
   /// decompresses a hunk of the CD codecs: the sectors and the subcodes of
   /// the frames compressed separately
   Uint8List _decompress(int codec, Uint8List src) {
+    if (_isDvd) return _decompressData(codec, src);
     final frames = _hunkBytes ~/ _frameBytes;
     final out = Uint8List(_hunkBytes);
     final sectorBytes = frames * _sectorBytes;
@@ -625,12 +670,8 @@ class ChdImage implements DiscImage {
       return out;
     }
     if (codec != _cdzl && codec != _cdlz && codec != _cdzs) {
-      throw FormatException('chd: the codec ${String.fromCharCodes([
-            codec >> 24,
-            (codec >> 16) & 0xff,
-            (codec >> 8) & 0xff,
-            codec & 0xff
-          ])} is not supported');
+      throw FormatException(
+          'chd: the codec ${_tagName(codec)} is not supported');
     }
 
     // the frames whose sync and ECC are removed, and the length of the
@@ -656,4 +697,15 @@ class ChdImage implements DiscImage {
     }
     return out;
   }
+
+  /// decompresses a hunk of the general purpose codecs, used by DVD images
+  Uint8List _decompressData(int codec, Uint8List src) {
+    if (codec == _zlib) return inflate(src, _hunkBytes);
+    if (codec == _lzma) return lzmaDecode(src, _hunkBytes);
+    if (codec == _zstd) return zstdDecode(src, _hunkBytes);
+    throw FormatException('chd: the codec ${_tagName(codec)} is not supported');
+  }
+
+  static String _tagName(int tag) => String.fromCharCodes(
+      [tag >> 24, (tag >> 16) & 0xff, (tag >> 8) & 0xff, tag & 0xff]);
 }

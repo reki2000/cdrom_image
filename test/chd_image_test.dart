@@ -79,6 +79,52 @@ Uint8List uncompressedChd(List<(String, List<Uint8List>)> tracks,
   return out.toBytes();
 }
 
+/// an uncompressed DVD CHD (version 5) of [sectors] of 2048 bytes, two
+/// sectors in a hunk
+Uint8List dvdChd(List<Uint8List> sectors) {
+  const sectorBytes = 2048, hunkBytes = 2 * sectorBytes;
+  final hunks = (sectors.length + 1) ~/ 2;
+  final out = BytesBuilder();
+  void u32(int v) =>
+      out.add([v >> 24, v >> 16, v >> 8, v].map((b) => b & 0xff).toList());
+  void u64(int v) {
+    u32(v >> 32);
+    u32(v & 0xffffffff);
+  }
+
+  const headerBytes = 124, mapOffset = headerBytes;
+  final metaOffset = mapOffset + hunks * 4;
+  const metaBytes = 16 + 1;
+  final dataOffset =
+      (metaOffset + metaBytes + hunkBytes - 1) ~/ hunkBytes * hunkBytes;
+  out.add('MComprHD'.codeUnits);
+  u32(headerBytes);
+  u32(5);
+  for (int i = 0; i < 4; i++) {
+    u32(0); // uncompressed
+  }
+  u64(sectors.length * sectorBytes);
+  u64(mapOffset);
+  u64(metaOffset);
+  u32(hunkBytes);
+  u32(sectorBytes);
+  out.add(Uint8List(60)); // sha1s, no parent
+  for (int h = 0; h < hunks; h++) {
+    u32(dataOffset ~/ hunkBytes + h);
+  }
+  out
+    ..add('DVD '.codeUnits)
+    ..add([0, 0, 0, 1])
+    ..add(Uint8List(8)) // no next entry
+    ..addByte(0)
+    ..add(Uint8List(dataOffset - out.length - 0));
+  for (final s in sectors) {
+    out.add(s);
+  }
+  out.add(Uint8List(dataOffset + hunks * hunkBytes - out.length));
+  return out.toBytes();
+}
+
 Uint8List frame(int fill, {int size = 2352}) =>
     Uint8List(frameBytes)..fillRange(0, size, fill);
 
@@ -175,6 +221,17 @@ void main() {
     expect(s.sublist(0, 16),
         [0, ...List.filled(10, 0xff), 0, 0, 0x02, 0x02, 1]); // 00:02:02 mode 1
     expect(s[16], 3);
+  });
+
+  test('a DVD is a data track of mode 1 sectors', () async {
+    final image = await open(dvdChd([
+      for (int i = 0; i < 5; i++) Uint8List(2048)..fillRange(0, 2048, i + 1)
+    ]));
+    expect(image.toc.tracks.single.toString(), 'track 1 data lba:0 sectors:5');
+    final sectors = await image.readSectors(3, 2);
+    expect(sectors[0].length, 2352);
+    expect(sectors[0][15], 1);
+    expect([for (final s in sectors) s[16 + 2047]], [4, 5]);
   });
 
   test('hunks across tracks and reading many sectors', () async {
