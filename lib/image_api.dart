@@ -5,7 +5,7 @@ import 'format/parse.dart' as parser;
 
 /// Disc image classification based on the file extension.
 enum DiscFileKind {
-  /// CUE, ISO or CHD image.
+  /// CUE, ISO, CHD or CDI image.
   image,
 
   /// BIN file, which may be a disc image or a ROM.
@@ -17,7 +17,7 @@ enum DiscFileKind {
   /// Classifies [name] using a case-insensitive extension match.
   static DiscFileKind of(String name) =>
       switch (name.substring(name.lastIndexOf('.') + 1).toLowerCase()) {
-        'cue' || 'iso' || 'chd' => image,
+        'cue' || 'iso' || 'chd' || 'cdi' => image,
         'bin' => maybeImage,
         _ => notImage,
       };
@@ -46,6 +46,15 @@ class DiscTrack {
       "track $number ${isAudio ? "audio" : "data"} lba:$startLba sectors:$sectors";
 }
 
+/// An explicitly stored session boundary, without the two-second lead-in.
+class DiscSession {
+  final int number;
+  final int firstTrack;
+  final int startLba;
+
+  const DiscSession(this.number, this.firstTrack, this.startLba);
+}
+
 /// Disc tracks and total sector count.
 class DiscToc {
   /// Tracks in disc order.
@@ -54,8 +63,11 @@ class DiscToc {
   /// Number of sectors from LBA 0, excluding the initial 150-sector pregap.
   final int totalSectors;
 
+  /// Null when the image format does not supply session metadata.
+  final List<DiscSession>? sessions;
+
   /// Creates a table of contents.
-  const DiscToc(this.tracks, this.totalSectors);
+  const DiscToc(this.tracks, this.totalSectors, {this.sessions});
 
   /// Empty table of contents.
   static const empty = DiscToc([], 0);
@@ -92,7 +104,7 @@ abstract interface class DiscImage {
   /// tracks, with paths relative to a common directory. [file] need not be
   /// included in [files]. Supply known references or all candidate files;
   /// unrelated candidates are ignored. Files are iterated once to index paths.
-  /// Standalone ISO, BIN and CHD images do not require [files].
+  /// Standalone ISO, BIN, CDI and CHD images do not require [files].
   /// Returns the image and distinct referenced files, excluding [file].
   /// Standalone images have no referenced files.
   /// Throws [DiscParseException] for invalid descriptions or missing references.
@@ -115,4 +127,13 @@ abstract interface class DiscImage {
   /// Gaps and missing bytes at EOF in CUE/ISO/BIN images are zero-filled.
   /// Storage and compressed-data errors propagate to the caller.
   Future<List<Uint8List>> readSectors(int lba, int count);
+}
+
+/// Optional capability for images that actually retain raw P-W subchannels.
+abstract interface class DiscSubcodeImage {
+  /// Reads 96 packed P-W symbols at [lba], excluding synchronization symbols.
+  /// Returns null when the source has no full raw subchannels for this sector.
+  /// Invalid LBAs and storage/decompression errors follow [DiscImage.readSectors].
+  /// The returned bytes are independent of the image's internal cache.
+  Future<Uint8List?> readSubcode(int lba);
 }

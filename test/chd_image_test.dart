@@ -90,6 +90,86 @@ Future<DiscImage> open(Uint8List chd) async {
 }
 
 void main() {
+  group('raw subchannels', () {
+    test(
+        'uncompressed symbols, cached copies and track padding remain independent',
+        () async {
+      final frames = [
+        for (var n = 0; n < 5; n++)
+          frame(n)
+            ..setRange(
+                2352, 2448, List.generate(96, (i) => (n * 13 + i * 7) & 255))
+      ];
+      final image = await open(uncompressedChd([
+        ('TRACK:1 TYPE:MODE1_RAW SUBTYPE:RW_RAW FRAMES:5', frames),
+        (
+          'TRACK:2 TYPE:MODE1_RAW SUBTYPE:RW_RAW FRAMES:1',
+          [frame(99)..fillRange(2352, 2448, 0xab)]
+        ),
+      ]));
+      final source = image as DiscSubcodeImage;
+      expect(await source.readSubcode(4),
+          List.generate(96, (i) => (52 + i * 7) & 255));
+      final bytes = (await source.readSubcode(5))!;
+      expect(bytes, everyElement(0xab));
+      bytes[0] = 0;
+      expect((await source.readSubcode(5))![0], 0xab);
+      expect((await image.readSectors(5, 1)).single, everyElement(99));
+      await expectLater(source.readSubcode(-1), throwsRangeError);
+      await expectLater(source.readSubcode(6), throwsRangeError);
+    });
+
+    test(
+        'missing and processed-only subchannels are unavailable, not invented P-Q',
+        () async {
+      for (final subtype in ['NONE', 'RW']) {
+        final image = await open(uncompressedChd([
+          ('TRACK:1 TYPE:MODE1_RAW SUBTYPE:$subtype FRAMES:1', [frame(1)]),
+        ]));
+        expect(await (image as DiscSubcodeImage).readSubcode(0), isNull);
+      }
+    });
+
+    test('stored pregaps use PGSUB and synthetic gaps have no raw subchannels',
+        () async {
+      final image = await open(uncompressedChd([
+        (
+          'TRACK:1 TYPE:MODE1_RAW SUBTYPE:RW_RAW FRAMES:2 PREGAP:1 PGTYPE:VMODE1_RAW PGSUB:RW_RAW POSTGAP:1',
+          [
+            frame(1)..fillRange(2352, 2448, 0x11),
+            frame(2)..fillRange(2352, 2448, 0x22)
+          ]
+        ),
+        (
+          'TRACK:2 TYPE:MODE1_RAW SUBTYPE:RW_RAW FRAMES:1 PREGAP:1 PGTYPE:MODE1_RAW PGSUB:NONE',
+          [frame(3)..fillRange(2352, 2448, 0x33)]
+        ),
+      ]));
+      final source = image as DiscSubcodeImage;
+      expect(await source.readSubcode(0), everyElement(0x11));
+      expect(await source.readSubcode(1), everyElement(0x22));
+      expect(await source.readSubcode(2), isNull);
+      expect(await source.readSubcode(3), isNull);
+      expect(await source.readSubcode(4), everyElement(0x33));
+    });
+
+    for (final codec in ['cdzl', 'cdlz', 'cdfl']) {
+      test('$codec preserves original tool-generated raw symbols in all hunks',
+          () async {
+        final image = await open(
+            File('test/fixtures/subcode_$codec.chd').readAsBytesSync());
+        final source = image as DiscSubcodeImage;
+        for (var n = 79; n >= 0; n--) {
+          expect(await source.readSubcode(n),
+              List.generate(96, (i) => (n * 13 + i * 7) & 255));
+          final sector = (await image.readSectors(n, 1)).single;
+          expect(sector.length, 2352);
+          expect(sector[31], n);
+        }
+      });
+    }
+  });
+
   chdmanFixture();
 
   test('.chd files are disc images', () {

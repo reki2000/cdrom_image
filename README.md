@@ -1,6 +1,6 @@
 # cdrom_image
 
-Pure Dart reader for CUE, ISO, BIN and CHD CD-ROM images. Provides TOC and sector access through a caller-supplied `DiscFile` API. Storage backends are independent of image formats.
+Pure Dart reader for CUE, ISO, BIN, CDI and CHD CD-ROM images. Provides TOC and sector access through a caller-supplied `DiscFile` API. Storage backends are independent of image formats.
 
 ISO 9660 file listing and extraction are not implemented.
 
@@ -8,6 +8,7 @@ ISO 9660 file listing and extraction are not implemented.
 
 - CUE: multiple binary track files, audio/data tracks, `INDEX 00/01`, `PREGAP`, `POSTGAP` and `MODE1/2048`.
 - ISO/BIN: single files with 2048 or 2352 bytes per sector.
+- CDI v3.5: explicit sessions, mixed audio/data tracks, stored pregaps, raw 2352-byte sectors, cooked Mode 1/2048 and Mode 1/Mode 2 sectors stored without their 16-byte header (2336 bytes).
 - CHD v5: chdman CD-ROM images using `cdlz`, `cdzl`, `cdfl` or `cdzs` (zstd). Reconstructs omitted sync/ECC bytes. Returns audio in BIN byte order.
 
 Unsupported: parent CHDs, CHD v3/v4, non-CD-ROM CHDs and cooked CHD `MODE2_FORM1/FORM2` tracks.
@@ -64,7 +65,7 @@ Future<void> main() async {
 
 Set `files` to the known CUE references. If references are unknown, supply all candidate files, such as every file in the same directory. Image and candidate paths must share the same directory root. Unrelated candidates are ignored; the returned list contains only referenced files. Including the image file in `files` is optional.
 
-For standalone ISO/BIN/CHD images, use `await DiscImage.parse(imageFile)`. Implement `DiscFile` for other storage backends, including browser files.
+For standalone ISO/BIN/CDI/CHD images, use `await DiscImage.parse(imageFile)`. Implement `DiscFile` for other storage backends, including browser files.
 
 Run the [example](example/cdrom_image_example.dart) from the package root:
 
@@ -85,6 +86,35 @@ The bundled `example/images/disc.cue` references `track.bin`, which contains two
 - Storage errors from `length()` and `read()` propagate to the caller.
 - Invalid descriptions or missing CUE references: `DiscParseException`. Compressed-data errors may surface during sector reads.
 
+## Raw subchannels
+
+Images may also implement the optional `DiscSubcodeImage` interface.
+`readSubcode(lba)` returns a copied 96-byte packed P-W record, without synchronization symbols, or null when the image does not retain full raw subchannels.
+CHD RW_RAW tracks and stored pregaps provide those records; NONE, processed R-W-only tracks and synthetic gaps do not invent missing P-Q data.
+Invalid sector ranges and storage/decompression errors use the same policy as sector reads.
+The image package does not interpret Q CRC, positions or identifiers; consumers own that interpretation.
+
+CD Deflate/LZMA/FLAC/Zstandard decompression retains the separate subchannel stream in each 2448-byte internal frame.
+Tests use original synthetic cdzl/cdlz/cdfl fixtures made with chdman 0.242 and uncompressed layout/copy-ownership cases.
+Generate those fixtures with `python3 tool/make_subcode_fixture.py OUTPUT_DIRECTORY`, then copy the resulting `subcode_*.chd` files into `test/fixtures/`.
+The generator creates eighty original sectors and deterministic raw symbols; no copyrighted disc data are included.
+The existing cdzs fixture checks zero-filled subchannels; independently generated nonzero cdzs coverage remains pending because the installed authoring tool does not support that codec.
+The [CHD authoring-tool documentation](https://docs.mamedev.org/tools/chdman.html) describes the codec families; the tests compare output data without referring to external emulator source code.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## CDI descriptor validation and fixtures
+
+CDI v3.5 support was developed from byte-level descriptor experiments, independently authored fixtures and the standalone CDIrip CLI as an opaque metadata/extraction oracle.
+No converter or emulator implementation was used as a reference.
+`tool/make_cdi_fixture.py` generates the original `cdi_mode1.cdi` and `cdi_sessions.cdi` files; `test/cdi_fixture.dart` supplies the same synthetic content without filesystem dependencies for browser tests.
+The mixed fixture contains three tracks across two sessions, includes optional descriptor variants and mixes 2352, 2048 and 2336 bytes per stored sector.
+CDIrip reports the same types, LBA values and lengths, and all extracted program bytes match the generated patterns.
+`DiscToc.sessions` retains explicitly stored session numbers, first-track numbers and start LBAs; formats without decoded session metadata leave it null.
+File-local pregaps are retained, the inaccessible initial negative-LBA pregap is omitted from the public sector range, and unrepresented logical gaps return zero sectors.
+Mode 1/2048 expansion leaves EDC/ECC zero; 2336-byte sectors retain their stored bytes after a reconstructed sync/address/mode header.
+Malformed descriptors, overlapping extents, payload-length mismatches and unsupported versions or encodings fail parsing rather than being reinterpreted as BIN.
+CDI v2/v3, open sessions, index counts other than two, cooked Mode 2/2048, larger sector encodings and unrecognized descriptor variants remain unsupported.
+The final disc-description block is not interpreted, and no raw subchannel or XA identity is inferred.

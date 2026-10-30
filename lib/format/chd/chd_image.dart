@@ -174,9 +174,10 @@ class _Track {
   final bool pregapStored;
   final String pregapType;
   final int postgap;
+  final String subtype, pregapSubtype;
 
   _Track(this.number, this.type, this.frames, this.pregap, this.pregapStored,
-      this.pregapType, this.postgap);
+      this.pregapType, this.postgap, this.subtype, this.pregapSubtype);
 
   bool get isAudio => type == 'AUDIO';
 
@@ -193,12 +194,12 @@ class _Track {
 class _Span {
   final int lba, count;
   final int? frame;
-  final String type;
-  _Span(this.lba, this.count, this.frame, this.type);
+  final String type, subtype;
+  _Span(this.lba, this.count, this.frame, this.type, [this.subtype = 'NONE']);
 }
 
 /// a CD-ROM image in a CHD file
-class ChdImage implements DiscImage {
+class ChdImage implements DiscImage, DiscSubcodeImage {
   final DiscFile file;
   final int _hunkBytes;
   final List<int> _codecs;
@@ -387,7 +388,9 @@ class ChdImage implements DiscImage {
             int.parse(f['PREGAP'] ?? '0'),
             pregapType.startsWith('V'),
             pregapType.startsWith('V') ? pregapType.substring(1) : pregapType,
-            int.parse(f['POSTGAP'] ?? '0')));
+            int.parse(f['POSTGAP'] ?? '0'),
+            f['SUBTYPE'] ?? 'NONE',
+            f['PGSUB'] ?? 'NONE'));
       }
       offset = next;
     }
@@ -409,7 +412,7 @@ class ChdImage implements DiscImage {
         if (t.pregapStored) {
           // the pregap is in the CHD, before the track
           spans.add(_Span(lba, t.pregap, frame,
-              t.pregapType.isEmpty ? t.type : t.pregapType));
+              t.pregapType.isEmpty ? t.type : t.pregapType, t.pregapSubtype));
           trackFrame += t.pregap;
           stored -= t.pregap;
         } else {
@@ -418,7 +421,7 @@ class ChdImage implements DiscImage {
         lba += t.pregap;
       }
       starts.add((t.number, t.isAudio, lba));
-      spans.add(_Span(lba, stored, trackFrame, t.type));
+      spans.add(_Span(lba, stored, trackFrame, t.type, t.subtype));
       lba += stored;
       if (t.postgap > 0) {
         spans.add(_Span(lba, t.postgap, null, t.type));
@@ -450,6 +453,21 @@ class ChdImage implements DiscImage {
       result.add(await _sector(lba + i));
     }
     return result;
+  }
+
+  @override
+  Future<Uint8List?> readSubcode(int lba) async {
+    if (!isReadable(lba)) throw RangeError.range(lba, 0, totalSectors - 1);
+    final span = _spanOf(lba);
+    if (span.subtype == 'NONE' || span.subtype == 'RW') return null;
+    if (span.subtype != 'RW_RAW') {
+      throw FormatException('chd: unsupported subchannel type ${span.subtype}');
+    }
+    final byte = _byteOf(lba);
+    if (byte == null) return null;
+    final hunk = await _hunk(byte ~/ _hunkBytes);
+    final at = byte % _hunkBytes + _sectorBytes;
+    return Uint8List.fromList(hunk.sublist(at, at + 96));
   }
 
   _Span _spanOf(int lba) {
@@ -616,11 +634,16 @@ class ChdImage implements DiscImage {
     final sectorBytes = frames * _sectorBytes;
 
     if (codec == _cdfl) {
-      // FLAC of the sectors, then deflate of the subcodes (not used here)
-      final (sectors, _) = FlacDecoder.decodeStereo16(src, sectorBytes ~/ 4);
+      // FLAC of the sectors, followed by raw deflate of the subchannels.
+      final (sectors, consumed) =
+          FlacDecoder.decodeStereo16(src, sectorBytes ~/ 4);
+      final subcodes =
+          inflate(Uint8List.sublistView(src, consumed), frames * 96);
       for (int f = 0; f < frames; f++) {
         out.setRange(f * _frameBytes, f * _frameBytes + _sectorBytes, sectors,
             f * _sectorBytes);
+        out.setRange(f * _frameBytes + _sectorBytes, (f + 1) * _frameBytes,
+            subcodes, f * 96);
       }
       return out;
     }
@@ -645,9 +668,14 @@ class ChdImage implements DiscImage {
         : codec == _cdlz
             ? lzmaDecode(base, sectorBytes)
             : zstdDecode(base, sectorBytes);
+    final tail = Uint8List.sublistView(src, header + baseLength);
+    final subcodes = codec == _cdzs
+        ? zstdDecode(tail, frames * 96)
+        : inflate(tail, frames * 96);
     for (int f = 0; f < frames; f++) {
       final at = f * _frameBytes;
       out.setRange(at, at + _sectorBytes, sectors, f * _sectorBytes);
+      out.setRange(at + _sectorBytes, at + _frameBytes, subcodes, f * 96);
       if (src[f >> 3] & (1 << (f & 7)) != 0) {
         final sector = Uint8List.sublistView(out, at, at + _sectorBytes);
         sector.setAll(0, _sync);
