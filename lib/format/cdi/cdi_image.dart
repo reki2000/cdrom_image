@@ -61,12 +61,9 @@ class CdiImage implements DiscImage {
         cursor.skip(4);
         cursor.skip(cursor.word(1));
         cursor.skip(19);
-        final tag = cursor.word(4);
-        if (tag == 0x80000000) {
-          cursor.skip(8);
-        } else if (tag != 0) {
-          throw const FormatException('Unsupported CDI track header variant');
-        }
+        // This word is either a flag for eight more header bytes or a plain
+        // value, such as 333,000 (a 74-minute capacity in sectors).
+        if (cursor.word(4) == 0x80000000) cursor.skip(8);
         if (cursor.word(2) != 2) {
           throw const FormatException('Unsupported CDI index count');
         }

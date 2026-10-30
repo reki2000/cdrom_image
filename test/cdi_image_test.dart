@@ -90,6 +90,18 @@ void main() {
     await expectLater(image.readSectors(0, 1), throwsA(same(failure)));
   });
 
+  test('a capacity word replaces the optional header flag', () async {
+    final bytes = await fixture('cdi_sessions.cdi');
+    final view = ByteData.sublistView(bytes);
+    final descriptor =
+        bytes.length - view.getUint32(bytes.length - 4, Endian.little);
+    // The second track has no optional header bytes.
+    view.setUint32(descriptor + 320, 333000, Endian.little);
+    final image = await parse(bytes);
+    expect(image.toc.tracks.map((t) => (t.startLba, t.sectors)),
+        [(0, 5), (5, 44995), (45000, 2)]);
+  });
+
   test(
       'invalid footers, markers, extents and unsupported encodings never fall back to BIN',
       () async {
@@ -115,7 +127,6 @@ void main() {
     await invalid(descriptor + 2, 0, size: 2);
     await invalid(descriptor + 8, 0);
     await invalid(descriptor + 4, 2);
-    await invalid(descriptor + 4 + 48 + 12, 123);
     await invalid(descriptor + 4 + 60 + 12, 3, size: 2);
     await invalid(descriptor + 4 + 154 + 12, 123);
     // The generated filename adds twelve bytes to each canonical track offset.
