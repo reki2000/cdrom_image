@@ -1,6 +1,6 @@
 # cdrom_image
 
-Pure Dart reader for CUE, ISO, BIN, CDI and CHD CD-ROM images. Provides TOC and sector access through a caller-supplied `DiscFile` API. Storage backends are independent of image formats.
+Pure Dart reader for CUE, ISO, BIN and CHD CD-ROM images and CHD DVD-ROM images. Provides TOC and sector access through a caller-supplied `DiscFile` API. Storage backends are independent of image formats.
 
 ISO 9660 file listing and extraction are not implemented.
 
@@ -10,8 +10,9 @@ ISO 9660 file listing and extraction are not implemented.
 - ISO/BIN: single files with 2048 or 2352 bytes per sector.
 - CDI v3.5: explicit sessions, mixed audio/data tracks, stored pregaps, raw 2352-byte sectors, cooked Mode 1/2048 and Mode 1/Mode 2 sectors stored without their 16-byte header (2336 bytes).
 - CHD v5: chdman CD-ROM images using `cdlz`, `cdzl`, `cdfl` or `cdzs` (zstd). Reconstructs omitted sync/ECC bytes. Returns audio in BIN byte order.
+- CHD v5 DVD: chdman DVD images with 2048-byte sectors using `zlib`, `lzma` or `zstd`. The image is one data track of Mode 1 sectors.
 
-Unsupported: parent CHDs, CHD v3/v4, non-CD-ROM CHDs and cooked CHD `MODE2_FORM1/FORM2` tracks.
+Unsupported: parent CHDs, CHD v3/v4, CHDs other than CD-ROM and DVD and cooked CHD `MODE2_FORM1/FORM2` tracks.
 
 ## Usage
 
@@ -82,7 +83,7 @@ The bundled `example/images/disc.cue` references `track.bin`, which contains two
 - `readSectors(lba, count)`: returns 2352-byte sectors. Requires a nonnegative count and a range within `totalSectors`. `isReadable(lba)` checks a single LBA.
 - Cooked Mode 1: expands 2048-byte payloads with sync and MSF/mode headers. EDC/ECC remain zero; output is not a bit-exact raw dump.
 - Gaps: zero-filled sectors. CUE/ISO/BIN reads also zero-fill missing bytes at EOF. Read success does not verify source integrity.
-- Raw CHD sectors: reconstruct ECC omitted by compression. Cooked Mode 1 expansion leaves EDC/ECC zero.
+- Raw CHD sectors: reconstruct ECC omitted by compression. Cooked Mode 1 expansion, including DVD sectors, leaves EDC/ECC zero.
 - Storage errors from `length()` and `read()` propagate to the caller.
 - Invalid descriptions or missing CUE references: `DiscParseException`. Compressed-data errors may surface during sector reads.
 
