@@ -12,7 +12,7 @@ Future<FileImage> openIso(DiscSource source) async {
   final cooked = await _isCooked(file, length, source.name);
   final sectors = FileImage.sectorsOf(length, cooked);
   if (sectors == 0) {
-    throw const FormatException("cdrom: empty image");
+    throw const FormatException("iso: empty image");
   }
   return FileImage(source, DiscToc([DiscTrack(1, false, 0, sectors)], sectors),
       [Extent(0, sectors, file, 0, cooked: cooked)]);
