@@ -289,12 +289,23 @@ class ChdImage implements DiscImage, DiscSubcodeImage {
           offsets,
           lengths,
           [_Span(0, sectors, 0, 'MODE1')],
-          DiscToc([DiscTrack(1, false, 0, sectors)], sectors));
+          DiscToc([DiscTrack(1, false, 0, sectors)], sectors,
+              medium: DiscMedium.dvd));
     }
-    final tracks = await _readTracks(file, metaOffset);
+    final (tracks, gdrom) = await _readTracks(file, metaOffset);
     final (spans, discTracks, total) = _layout(tracks);
-    return ChdImage._(file, hunkBytes, unitBytes, codecs, kinds, offsets,
-        lengths, spans, DiscToc(discTracks, total));
+    return ChdImage._(
+        file,
+        hunkBytes,
+        unitBytes,
+        codecs,
+        kinds,
+        offsets,
+        lengths,
+        spans,
+        DiscToc(discTracks, total,
+            sessions: gdrom ? _gdromSessions(discTracks) : null,
+            medium: gdrom ? DiscMedium.gd : DiscMedium.cd));
   }
 
   /// true if the metadata from [offset] has an entry of [tag]
@@ -408,8 +419,10 @@ class ChdImage implements DiscImage, DiscSubcodeImage {
   }
 
   /// the tracks of the CD-ROM metadata
-  static Future<List<_Track>> _readTracks(DiscFile file, int offset) async {
+  static Future<(List<_Track>, bool)> _readTracks(
+      DiscFile file, int offset) async {
     final tracks = <_Track>[];
+    var gdrom = false;
     final cht2 = _tag('CHT2'), chtr = _tag('CHTR'), chgd = _tag('CHGD');
     while (offset != 0) {
       final head = await file.read(offset, 16);
@@ -417,6 +430,7 @@ class ChdImage implements DiscImage, DiscSubcodeImage {
       final length = _be(head, 5, 3);
       final next = _be(head, 8, 8);
       if (tag == cht2 || tag == chtr || tag == chgd) {
+        if (tag == chgd) gdrom = true;
         final text = String.fromCharCodes(
             (await file.read(offset + 16, length)).takeWhile((c) => c != 0));
         final f = {
@@ -439,7 +453,26 @@ class ChdImage implements DiscImage, DiscSubcodeImage {
     }
     if (tracks.isEmpty) throw const FormatException('chd: no CD-ROM tracks');
     tracks.sort((a, b) => a.number.compareTo(b.number));
-    return tracks;
+    return (tracks, gdrom);
+  }
+
+  /// The first LBA of the high-density area of a GD-ROM.
+  static const _gdromHighDensityLba = 45000;
+
+  /// The two sessions of a GD-ROM: the single-density area from the start and
+  /// the high-density area from its first track at or after LBA 45000. The
+  /// track frames of the CHD include the padding up to that boundary.
+  static List<DiscSession> _gdromSessions(List<DiscTrack> tracks) {
+    final sessions = [
+      DiscSession(1, tracks.first.number, tracks.first.startLba)
+    ];
+    for (final track in tracks) {
+      if (track.startLba >= _gdromHighDensityLba) {
+        sessions.add(DiscSession(2, track.number, track.startLba));
+        break;
+      }
+    }
+    return List.unmodifiable(sessions);
   }
 
   /// the sectors by LBA, and the TOC
