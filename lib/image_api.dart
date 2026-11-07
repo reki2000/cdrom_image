@@ -55,6 +55,21 @@ class DiscSession {
   const DiscSession(this.number, this.firstTrack, this.startLba);
 }
 
+/// The kind of disc an image was made from, when the format records it.
+enum DiscMedium {
+  /// The format does not say.
+  unknown,
+
+  /// A CD-ROM.
+  cd,
+
+  /// A GD-ROM: tracks in one LBA space, the high-density area from LBA 45000.
+  gd,
+
+  /// A DVD.
+  dvd,
+}
+
 /// Disc tracks and total sector count.
 class DiscToc {
   /// Tracks in disc order.
@@ -66,8 +81,12 @@ class DiscToc {
   /// Null when the image format does not supply session metadata.
   final List<DiscSession>? sessions;
 
+  /// The disc kind recorded by the image format, or [DiscMedium.unknown].
+  final DiscMedium medium;
+
   /// Creates a table of contents.
-  const DiscToc(this.tracks, this.totalSectors, {this.sessions});
+  const DiscToc(this.tracks, this.totalSectors,
+      {this.sessions, this.medium = DiscMedium.unknown});
 
   /// Empty table of contents.
   static const empty = DiscToc([], 0);

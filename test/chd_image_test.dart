@@ -14,7 +14,7 @@ const frameBytes = 2448;
 /// an uncompressed CHD (version 5) of [tracks]: (metadata text, frames of
 /// 2448 bytes). the frames of each track are padded to a multiple of 4.
 Uint8List uncompressedChd(List<(String, List<Uint8List>)> tracks,
-    {int framesPerHunk = 4}) {
+    {int framesPerHunk = 4, String tag = 'CHT2'}) {
   final hunkBytes = framesPerHunk * frameBytes;
   final frames = <Uint8List>[];
   for (final (_, data) in tracks) {
@@ -42,7 +42,7 @@ Uint8List uncompressedChd(List<(String, List<Uint8List>)> tracks,
     final text = Uint8List.fromList([...tracks[i].$1.codeUnits, 0]);
     final next =
         i + 1 < tracks.length ? metaOffset + meta.length + 16 + text.length : 0;
-    meta.add('CHT2'.codeUnits);
+    meta.add(tag.codeUnits);
     meta.add(
         [0, text.length >> 16, text.length >> 8 & 0xff, text.length & 0xff]);
     meta.add([
@@ -191,6 +191,29 @@ void main() {
       0x20,
       0x21
     ]);
+  });
+
+  test('the metadata tag decides the medium of the TOC', () async {
+    List<(String, List<Uint8List>)> tracks() => [
+          (
+            'TRACK:1 TYPE:MODE1_RAW SUBTYPE:NONE FRAMES:8 PREGAP:0 PGTYPE:MODE1 '
+                'PGSUB:NONE POSTGAP:0',
+            [for (int i = 0; i < 8; i++) frame(i)]
+          ),
+        ];
+    final cd = await open(uncompressedChd(tracks()));
+    expect(cd.toc.medium, DiscMedium.cd);
+    expect(cd.toc.sessions, isNull);
+    final gd = await open(uncompressedChd(tracks(), tag: 'CHGD'));
+    expect(gd.toc.medium, DiscMedium.gd);
+    // No track starts in the high-density area, so there is one session.
+    expect([
+      for (final s in gd.toc.sessions!) (s.number, s.firstTrack, s.startLba)
+    ], [
+      (1, 1, 0)
+    ]);
+    final dvd = await open(dvdChd([Uint8List(2048)]));
+    expect(dvd.toc.medium, DiscMedium.dvd);
   });
 
   for (final mode in [1, 2]) {
