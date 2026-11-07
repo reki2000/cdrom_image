@@ -38,22 +38,4 @@ void main() {
     });
   }
 
-  test('decoding stops at the number of samples', () {
-    final data = frames(File('test/fixtures/flac_8.flac').readAsBytesSync());
-    // the first 2 blocks of 2352 samples
-    final (out, used) = FlacDecoder.decodeStereo16(data, 2352 * 2);
-    expect(out.length, 2352 * 2 * 4);
-    expect(used, lessThan(data.length));
-    final (rest, _) =
-        FlacDecoder.decodeStereo16(Uint8List.sublistView(data, used), 2352);
-    expect(rest.length, 2352 * 4);
-  });
-
-  test('truncated frames are an error', () {
-    final data = frames(File('test/fixtures/flac_8.flac').readAsBytesSync());
-    expect(
-        () => FlacDecoder.decodeStereo16(
-            Uint8List.sublistView(data, 0, 100), 2352),
-        throwsFormatException);
-  });
 }

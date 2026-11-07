@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import '../../filesystem_api.dart';
 import '../../image_api.dart';
+import '../file_image.dart';
 import 'cd_ecc.dart';
 import 'codecs.dart';
 import 'flac.dart';
@@ -18,21 +19,6 @@ const _dvdSectorBytes = 2048;
 
 /// the frames of a track are padded to a multiple of this in a CHD
 const _trackPadding = 4;
-
-const _sync = [
-  0,
-  0xff,
-  0xff,
-  0xff,
-  0xff,
-  0xff,
-  0xff,
-  0xff,
-  0xff,
-  0xff,
-  0xff,
-  0
-];
 
 int _tag(String s) =>
     s.codeUnitAt(0) << 24 |
@@ -523,6 +509,7 @@ class ChdImage implements DiscImage, DiscSubcodeImage {
 
   @override
   Future<List<Uint8List>> readSectors(int lba, int count) async {
+    DiscImage.checkSectorRange(lba, count, totalSectors);
     _prefetch(lba, count);
     final result = <Uint8List>[];
     for (int i = 0; i < count; i++) {
@@ -635,23 +622,16 @@ class ChdImage implements DiscImage, DiscSubcodeImage {
 
   /// a raw sector of the user data of a cooked sector
   static Uint8List _rawSector(Uint8List data, int lba, String type) {
-    final out = Uint8List(_sectorBytes)..setAll(0, _sync);
-    final msf = lba + 150;
-    int bcd(int v) => ((v ~/ 10) << 4) | (v % 10);
-    out[12] = bcd(msf ~/ (60 * 75));
-    out[13] = bcd(msf ~/ 75 % 60);
-    out[14] = bcd(msf % 75);
     switch (type) {
       case 'MODE1':
-        out[15] = 1;
-        out.setAll(16, data);
+        return FileImage.mode1Sector(data, lba);
       case 'MODE2' || 'MODE2_FORM_MIX':
-        out[15] = 2;
-        out.setAll(16, data);
+        return FileImage.mode1Sector(Uint8List(2048), lba)
+          ..[15] = 2
+          ..setAll(16, data);
       default:
         throw FormatException('chd: $type tracks are not supported');
     }
-    return out;
   }
 
   Future<Uint8List> _hunk(int index) {
@@ -751,7 +731,7 @@ class ChdImage implements DiscImage, DiscSubcodeImage {
       out.setRange(at + _sectorBytes, at + _frameBytes, subcodes, f * 96);
       if (src[f >> 3] & (1 << (f & 7)) != 0) {
         final sector = Uint8List.sublistView(out, at, at + _sectorBytes);
-        sector.setAll(0, _sync);
+        sector.setAll(0, FileImage.sync);
         generateEcc(sector);
       }
     }

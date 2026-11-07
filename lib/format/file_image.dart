@@ -87,10 +87,11 @@ class FileImage implements DiscImage {
   }
 
   /// reads [count] raw sectors (2352 bytes) from [lba]. cooked sectors are
-  /// expanded to raw mode 1 ones, and gaps are filled with zero. the range
-  /// must be readable.
+  /// expanded to raw mode 1 ones, and gaps are filled with zero. throws a
+  /// RangeError if the range is not readable.
   @override
   Future<List<Uint8List>> readSectors(int lba, int count) async {
+    DiscImage.checkSectorRange(lba, count, totalSectors);
     final result = <Uint8List>[];
     for (final seg in segments(lba, count)) {
       final file = seg.file;
@@ -118,7 +119,7 @@ class FileImage implements DiscImage {
   /// are left zero, as the cores do not correct errors.
   static Uint8List mode1Sector(Uint8List data, int lba) {
     if (data.length != cookedSectorSize) {
-      throw ArgumentError('Mode 1 data must be 2048 bytes');
+      throw ArgumentError('cdrom: mode 1 data must be 2048 bytes');
     }
     final msf = lba + 150; // with lead-in
     int bcd(int value) => ((value ~/ 10) << 4) | (value % 10);

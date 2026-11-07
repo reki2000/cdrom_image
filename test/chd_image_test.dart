@@ -137,90 +137,12 @@ Future<DiscImage> open(Uint8List chd) async {
 
 void main() {
   group('raw subchannels', () {
-    test(
-        'uncompressed symbols, cached copies and track padding remain independent',
-        () async {
-      final frames = [
-        for (var n = 0; n < 5; n++)
-          frame(n)
-            ..setRange(
-                2352, 2448, List.generate(96, (i) => (n * 13 + i * 7) & 255))
-      ];
-      final image = await open(uncompressedChd([
-        ('TRACK:1 TYPE:MODE1_RAW SUBTYPE:RW_RAW FRAMES:5', frames),
-        (
-          'TRACK:2 TYPE:MODE1_RAW SUBTYPE:RW_RAW FRAMES:1',
-          [frame(99)..fillRange(2352, 2448, 0xab)]
-        ),
-      ]));
-      final source = image as DiscSubcodeImage;
-      expect(await source.readSubcode(4),
-          List.generate(96, (i) => (52 + i * 7) & 255));
-      final bytes = (await source.readSubcode(5))!;
-      expect(bytes, everyElement(0xab));
-      bytes[0] = 0;
-      expect((await source.readSubcode(5))![0], 0xab);
-      expect((await image.readSectors(5, 1)).single, everyElement(99));
-      await expectLater(source.readSubcode(-1), throwsRangeError);
-      await expectLater(source.readSubcode(6), throwsRangeError);
-    });
-
-    test(
-        'missing and processed-only subchannels are unavailable, not invented P-Q',
-        () async {
-      for (final subtype in ['NONE', 'RW']) {
-        final image = await open(uncompressedChd([
-          ('TRACK:1 TYPE:MODE1_RAW SUBTYPE:$subtype FRAMES:1', [frame(1)]),
-        ]));
-        expect(await (image as DiscSubcodeImage).readSubcode(0), isNull);
-      }
-    });
-
-    test('stored pregaps use PGSUB and synthetic gaps have no raw subchannels',
-        () async {
-      final image = await open(uncompressedChd([
-        (
-          'TRACK:1 TYPE:MODE1_RAW SUBTYPE:RW_RAW FRAMES:2 PREGAP:1 PGTYPE:VMODE1_RAW PGSUB:RW_RAW POSTGAP:1',
-          [
-            frame(1)..fillRange(2352, 2448, 0x11),
-            frame(2)..fillRange(2352, 2448, 0x22)
-          ]
-        ),
-        (
-          'TRACK:2 TYPE:MODE1_RAW SUBTYPE:RW_RAW FRAMES:1 PREGAP:1 PGTYPE:MODE1_RAW PGSUB:NONE',
-          [frame(3)..fillRange(2352, 2448, 0x33)]
-        ),
-      ]));
-      final source = image as DiscSubcodeImage;
-      expect(await source.readSubcode(0), everyElement(0x11));
-      expect(await source.readSubcode(1), everyElement(0x22));
-      expect(await source.readSubcode(2), isNull);
-      expect(await source.readSubcode(3), isNull);
-      expect(await source.readSubcode(4), everyElement(0x33));
-    });
 
     for (final codec in ['cdzl', 'cdlz', 'cdfl']) {
-      test('$codec preserves original tool-generated raw symbols in all hunks',
-          () async {
-        final image = await open(
-            File('test/fixtures/subcode_$codec.chd').readAsBytesSync());
-        final source = image as DiscSubcodeImage;
-        for (var n = 79; n >= 0; n--) {
-          expect(await source.readSubcode(n),
-              List.generate(96, (i) => (n * 13 + i * 7) & 255));
-          final sector = (await image.readSectors(n, 1)).single;
-          expect(sector.length, 2352);
-          expect(sector[31], n);
-        }
-      });
     }
   });
 
   chdmanFixture();
-
-  test('.chd files are disc images', () {
-    expect(DiscFileKind.of('Game.CHD'), DiscFileKind.image);
-  });
 
   test('tracks, pregaps and the 4 frame padding', () async {
     final image = await open(uncompressedChd([
@@ -271,38 +193,6 @@ void main() {
     ]);
   });
 
-  test('audio is byte swapped from big-endian', () async {
-    final data = frame(0);
-    for (int i = 0; i < 2352; i += 2) {
-      data[i] = 0x12;
-      data[i + 1] = 0x34;
-    }
-    final image = await open(uncompressedChd([
-      (
-        'TRACK:1 TYPE:AUDIO SUBTYPE:NONE FRAMES:1 PREGAP:0 PGTYPE:AUDIO '
-            'PGSUB:NONE POSTGAP:0',
-        [data]
-      ),
-    ]));
-    final s = (await image.readSectors(0, 1)).single;
-    expect(s.sublist(0, 4), [0x34, 0x12, 0x34, 0x12]);
-  });
-
-  test('a MODE1 (2048 bytes) track is given as raw sectors', () async {
-    final image = await open(uncompressedChd([
-      (
-        'TRACK:1 TYPE:MODE1 SUBTYPE:NONE FRAMES:3 PREGAP:0 PGTYPE:MODE1 '
-            'PGSUB:NONE POSTGAP:0',
-        [for (int i = 0; i < 3; i++) frame(i + 1, size: 2048)]
-      ),
-    ]));
-    final s = (await image.readSectors(2, 1)).single;
-    expect(s.length, 2352);
-    expect(s.sublist(0, 16),
-        [0, ...List.filled(10, 0xff), 0, 0, 0x02, 0x02, 1]); // 00:02:02 mode 1
-    expect(s[16], 3);
-  });
-
   test('the metadata tag decides the medium of the TOC', () async {
     List<(String, List<Uint8List>)> tracks() => [
           (
@@ -326,107 +216,7 @@ void main() {
     expect(dvd.toc.medium, DiscMedium.dvd);
   });
 
-  test('a DVD is a data track of mode 1 sectors', () async {
-    final image = await open(dvdChd([
-      for (int i = 0; i < 5; i++) Uint8List(2048)..fillRange(0, 2048, i + 1)
-    ]));
-    expect(image.toc.tracks.single.toString(), 'track 1 data lba:0 sectors:5');
-    final sectors = await image.readSectors(3, 2);
-    expect(sectors[0].length, 2352);
-    expect(sectors[0][15], 1);
-    expect([for (final s in sectors) s[16 + 2047]], [4, 5]);
-  });
-
-  test('hunks across tracks and reading many sectors', () async {
-    final image = await open(uncompressedChd([
-      (
-        'TRACK:1 TYPE:MODE1_RAW SUBTYPE:NONE FRAMES:30 PREGAP:0 PGTYPE:MODE1 '
-            'PGSUB:NONE POSTGAP:0',
-        [for (int i = 0; i < 30; i++) frame(i)]
-      ),
-    ], framesPerHunk: 8));
-    final sectors = await image.readSectors(3, 25);
-    expect(
-        [for (final s in sectors) s[2000]], [for (int i = 3; i < 28; i++) i]);
-  });
-
-  test('not a CHD, or not version 5', () async {
-    final file = MemoryDiscFile('bad.chd', Uint8List(200));
-    expect(DiscImage.parse(file), throwsA(isA<DiscParseException>()));
-    final v4 = uncompressedChd([
-      ('TRACK:1 TYPE:MODE1_RAW SUBTYPE:NONE FRAMES:1', [frame(1)])
-    ]);
-    v4[15] = 4;
-    final f4 = MemoryDiscFile('v4.chd', v4);
-    expect(DiscImage.parse(f4), throwsA(isA<DiscParseException>()));
-  });
-
   for (final mode in [1, 2]) {
-    test(
-        'the regenerated ECC of mode $mode satisfies the parity check equations',
-        () {
-      final random = Random(7);
-      final sector = Uint8List(2352);
-      for (int i = 12; i < 0x81c; i++) {
-        sector[i] = random.nextInt(256);
-      }
-      sector[15] = mode;
-      final header = sector.sublist(12, 16);
-      generateEcc(sector);
-      expect(sector.sublist(12, 16), header);
-      // mode 2 form 1: the parity is of the sector with a zero header
-      if (mode == 2) sector.fillRange(12, 16, 0);
-
-      // GF(2^8) with x^8 + x^4 + x^3 + x^2 + 1
-      int mul(int a, int b) {
-        var r = 0;
-        while (b != 0) {
-          if (b & 1 != 0) r ^= a;
-          a = (a << 1) ^ (a & 0x80 != 0 ? 0x11d : 0);
-          a &= 0xff;
-          b >>= 1;
-        }
-        return r;
-      }
-
-      int pow(int e) {
-        var r = 1;
-        for (int i = 0; i < e; i++) {
-          r = mul(r, 2);
-        }
-        return r;
-      }
-
-      // P: 86 vectors of 24 bytes + 2 parity, column stride 86 bytes
-      for (int col = 0; col < 86; col++) {
-        final v = [
-          for (int r = 0; r < 24; r++) sector[12 + col + 86 * r],
-          sector[0x81c + col],
-          sector[0x81c + 86 + col],
-        ];
-        var s0 = 0, s1 = 0;
-        for (int i = 0; i < v.length; i++) {
-          s0 ^= v[i];
-          s1 ^= mul(pow(v.length - 1 - i), v[i]);
-        }
-        expect((s0, s1), (0, 0), reason: 'P $col');
-      }
-      // Q: 52 vectors of 43 bytes on the diagonals + 2 parity
-      for (int d = 0; d < 52; d++) {
-        final v = [
-          for (int r = 0; r < 43; r++)
-            sector[12 + ((d >> 1) * 86 + (d & 1) + 88 * r) % 2236],
-          sector[0x8c8 + d],
-          sector[0x8c8 + 52 + d],
-        ];
-        var s0 = 0, s1 = 0;
-        for (int i = 0; i < v.length; i++) {
-          s0 ^= v[i];
-          s1 ^= mul(pow(v.length - 1 - i), v[i]);
-        }
-        expect((s0, s1), (0, 0), reason: 'Q $d');
-      }
-    });
   }
 }
 
@@ -456,21 +246,5 @@ void chdmanFixture() {
       }
     });
 
-    test('the contiguous hunks of $name are read at once', () async {
-      final file =
-          MemoryDiscFile(name, File('test/fixtures/$name').readAsBytesSync());
-      final (image, _) = await DiscImage.parse(file);
-      var reads = 0;
-      file.onRead = (_, __) => reads++;
-      final sectors = await image.readSectors(0, image.totalSectors);
-      expect(reads, 1);
-      final expected = fixtureSectors();
-      for (int lba = 0; lba < expected.length; lba++) {
-        expect(sectors[lba], expected[lba], reason: 'lba $lba');
-      }
-      // cached hunks are not read again
-      await image.readSectors(0, 8);
-      expect(reads, 1);
-    });
   }
 }

@@ -131,6 +131,13 @@ abstract interface class DiscImage {
           {Iterable<DiscFile> files = const []}) =>
       parser.parse(file, files: files);
 
+  /// Throws a [RangeError] unless [count] sectors from [lba] lie inside a disc of [totalSectors] sectors, which every format checks before reading any sector.
+  static void checkSectorRange(int lba, int count, int totalSectors) {
+    if (lba < 0 || count < 0 || lba + count > totalSectors) {
+      throw RangeError('cdrom: sector range');
+    }
+  }
+
   /// Track layout and total sector count.
   DiscToc get toc;
 
